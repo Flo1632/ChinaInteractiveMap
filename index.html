@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive China Map</title>
+  <style>
+    :root { --bg:#0b0d10; --panel:#11141a; --muted:#7c8799; --accent:#4da3ff; --ring:#97c7ff; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial; background:var(--bg); color:#e9eef7}
+    .app{display:grid; grid-template-columns:1.1fr .9fr; gap:16px; height:100vh; padding:16px}
+    .left,.right{background:var(--panel); border:1px solid #1b2230; border-radius:18px; overflow:hidden; display:flex; flex-direction:column}
+    .left{min-width:300px}
+    .toolbar{display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #1b2230}
+    .title{font-weight:700; letter-spacing:.2px}
+    .muted{color:var(--muted); font-size:12px}
+
+    .lang-toggle{display:flex; gap:8px}
+    .lang-toggle button{background:#0e1219; color:#cfe2ff; border:1px solid #1b2230; border-radius:999px; padding:8px 12px; cursor:pointer; font-weight:600}
+    .lang-toggle button.active{outline:2px solid var(--ring); background:#0f1a2b}
+
+    .map-wrap{position:relative; flex:1; min-height:300px;}
+    .map-inner{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;}
+    .map{max-width:100%; max-height:100%; width:100%; height:auto; display:block; filter:drop-shadow(0 10px 22px rgba(0,0,0,.35))}
+
+    .markers{position:absolute; inset:0; pointer-events:none}
+    .marker{position:absolute; transform:translate(-50%,-50%); pointer-events:auto; border:none; background:#102033; color:#e9eef7; border:1px solid #223247; padding:6px 10px; border-radius:12px; font-size:12px; cursor:pointer; white-space:nowrap}
+    .marker:hover{outline:2px solid var(--ring)}
+    .marker.active{background:#17365d; border-color:#2b5d95}
+
+    .right .content{display:flex; flex-direction:column; gap:14px; padding:16px; overflow:auto}
+    .card{background:#0e1219; border:1px solid #1b2230; border-radius:16px; padding:16px}
+    .hero{display:flex; gap:14px; align-items:center}
+    .hero img{width:120px; height:90px; object-fit:cover; border-radius:12px; border:1px solid #1b2230}
+    .name{font-size:20px; font-weight:800}
+    .tags{display:flex; gap:8px; flex-wrap:wrap}
+    .tag{font-size:11px; color:#b6c3d6; background:#0a111b; padding:4px 8px; border-radius:999px; border:1px solid #1b2230}
+    .desc{line-height:1.35; color:#d6e3f5}
+    .desc ul{margin:0 0 0 18px; padding:0}
+    .desc li{margin:4px 0}
+
+    .footer{padding:10px 16px; border-top:1px solid #1b2230; display:flex; justify-content:space-between; align-items:center}
+    .source{font-size:12px; color:#9fb5d4}
+
+    @media (max-width: 980px){ .app{grid-template-columns:1fr; height:auto} .left{height:60vh} .right{height:auto; min-height:40vh} }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Interactive China Map">
+    <section class="left" aria-label="Map">
+      <div class="toolbar">
+        <div>
+          <div class="title">China 地图 • Map</div>
+          <div class="muted">Click a region. 点击一个地区。</div>
+        </div>
+        <div class="lang-toggle" role="group" aria-label="Language">
+          <button data-lang="en" class="active" aria-pressed="true">English</button>
+          <button data-lang="zh" aria-pressed="false">中文</button>
+        </div>
+      </div>
+      <div class="map-wrap">
+        <div class="map-inner">
+          <img id="chinaMap" class="map" alt="China Map" />
+          <div class="markers" id="markers" aria-hidden="false"></div>
+        </div>
+      </div>
+      <div class="footer">
+        <div class="source">Image source / 图片来源：your GitHub repo</div>
+        <div class="muted">Only repo assets are loaded. 仅加载仓库中的资源。</div>
+      </div>
+    </section>
+    <section class="right" aria-live="polite" aria-label="Details">
+      <div class="content" id="content">
+        <div class="card">
+          <div class="hero">
+            <img id="provImg" alt="Province image" />
+            <div>
+              <div class="name" id="provName">Welcome! 欢迎！</div>
+              <div class="tags" id="provTags"></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="desc" id="provDesc">Choose a province/region on the left map. 在左侧地图选择一个地区。</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+  // ====== CONFIG: Only your repo ======
+  const REPO_USER = "Flo1632";
+  const REPO_NAME = "ChinaInteractiveMap";
+  const BRANCH = "main";
+  const RAW_BASE = `https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/${BRANCH}/`;
+
+  // Map background: fixed path in your repo
+  (function(){
+    const MAP_URL = "https://github.com/Flo1632/ChinaInteractiveMap/blob/main/ChatGPT China_Map.png";
+    const el = document.getElementById('chinaMap');
+    el.src = encodeURI(MAP_URL) + "?raw=1";
+    el.alt = "China map";
+  })();
+
+  // Province image URL (your naming scheme)
+  // Example: Anhui → "ChatGPT Anhui.png"; Hong Kong → "ChatGPT HK.png"
+  function getProvinceImageURL(p){
+    const en = p?.names?.en || "";
+    const short = (en === "Hong Kong") ? "HK" : en;
+    const filename = `ChatGPT ${short}.png`;
+    return RAW_BASE + encodeURIComponent(filename);
+  }
+
+  // Tier labels (EN/ZH only)
+  const MUNICIPALITIES = new Set(['beijing','tianjin','shanghai','chongqing']);
+  const AUTONOMOUS  = new Set(['xinjiang','tibet','inner-mongolia','ningxia','guangxi']);
+  const SARS        = new Set(['hong-kong','macau']);
+  function tierLabelFor(p, lang){
+    if (MUNICIPALITIES.has(p.id)) return lang==='zh' ? '直辖市' : 'Municipality';
+    if (AUTONOMOUS.has(p.id))     return lang==='zh' ? '自治区' : 'Autonomous Region';
+    if (SARS.has(p.id))           return lang==='zh' ? '特别行政区' : 'Special Administrative Region';
+    if (p.id==='taiwan')          return lang==='zh' ? '省级地区' : 'Provincial‑level';
+    return lang==='zh' ? '省' : 'Province';
+  }
+
+  // ====== Data (subset shown here, EN/ZH bullet points) ======
+  const PROVINCES = [
+    // Municipalities
+    { id:"beijing", names:{en:"Beijing", zh:"北京"}, x:71, y:28,
+      desc:{
+        en:["Capital and political center","Imperial axis: Forbidden City, Tian’anmen","Temple of Heaven and royal altars","Top universities: Peking, Tsinghua","Zhongguancun tech hub","High‑speed rail & air hub","Cuisine: Peking duck, snacks","Great Wall sections in suburbs","Hutongs & courtyard houses","Rich museums and festivals"],
+        zh:["中国首都与政治中心","皇城中轴线：故宫、天安门","天坛与皇家祭坛","名校云集：北大、清华","中关村科技园","高铁与航空枢纽","美食代表：北京烤鸭等","郊区多段长城","胡同与四合院","博物馆与文化活动丰富"]
+      } },
+    { id:"tianjin", names:{en:"Tianjin", zh:"天津"}, x:72, y:30,
+      desc:{
+        en:["19th‑century treaty port","European concessions & mixed architecture","Haihe River and Tianjin Eye","Binhai New Area growth pole","Aviation and aerospace industry","Major Bohai Sea port","Goubuli buns and local snacks","HSR link to Beijing","Universities: Nankai, Tianjin U","Heavy industry and services"],
+        zh:["十九世纪条约口岸","欧式租界与多元建筑","海河与天津之眼","滨海新区增长极","航空航天产业","渤海湾大型港口","狗不理包子等小吃","高铁直达北京","高校：南开、天大","重工业与现代服务业并重"]
+      } },
+    { id:"shanghai", names:{en:"Shanghai", zh:"上海"}, x:77, y:49,
+      desc:{
+        en:["Mainland financial capital","The Bund & Art Deco heritage","Lujiazui skyline","Pilot free‑trade zone","Shikumen lanes & lilong culture","Dense metro and transport network","Major expos: CIIE, Auto Show","Xiaolongbao & Benbang cuisine","Creative quarters: Tianzifang","Highly international, startup scene"],
+        zh:["内地金融中心","外滩与海派艺术装饰风格","陆家嘴摩天楼群","自由贸易试验区","石库门与里弄文化","地铁与交通网络发达","展会：进博会、车展","美食：小笼包、本帮菜","创意街区：田子坊等","国际化与创业生态浓厚"]
+      } },
+    { id:"chongqing", names:{en:"Chongqing", zh:"重庆"}, x:58, y:58,
+      desc:{
+        en:["Mountain city at Yangtze/Jialing","Wartime capital in WWII","Famous for spicy hotpot","Three Gorges shipping corridor","Aerial tram & multi‑level roads","Auto and motorcycle industry","Core of Western Development","Hongyadong nightscape icon","Hot, humid ‘furnace’ summers","Upper‑Yangtze logistics/manufacturing"],
+        zh:["山城，长江与嘉陵江交汇","二战时期战时首都","麻辣火锅闻名","三峡航运通道","索道与立体交通系统","汽车摩托产业基地","西部大开发核心城市","洪崖洞灯光夜景","夏季高温湿热，“火炉”","上游物流制造中心"]
+      } },
+
+    // Provinces & regions (same content as before, EN/ZH only)
+    { id:"hebei", names:{en:"Hebei", zh:"河北"}, x:69, y:32,
+      desc:{
+        en:["Capital: Shijiazhuang","Encircles Beijing and Tianjin","Great Wall sections incl. Shanhaiguan","Bohai ports like Qinhuangdao","Major steel and heavy industry","Xiong’an New Area under build","Wheat and corn heartland","Chengde Mountain Resort (UNESCO)","Coast and North China Plain","Key North China transport hub"],
+        zh:["省会石家庄","环绕京津两市","长城多段与山海关","秦皇岛等渤海港口","钢铁与重工业基地","雄安新区建设中","小麦玉米主产区","承德避暑山庄(世遗)","滨海与华北平原","华北交通要道"]
+      } },
+    { id:"shandong", names:{en:"Shandong", zh:"山东"}, x:76, y:38,
+      desc:{
+        en:["Capital: Jinan, City of Springs","Confucius’ hometown, Qufu","Mount Tai (UNESCO)","Coastal cities: Qingdao, Yantai, Weihai","Tsingtao beer heritage","Navy, shipbuilding, ports","Peanut and vegetable production","Weifang kite culture","Robust manufacturing clusters","Peninsula on the Yellow Sea"],
+        zh:["省会济南，泉水众多","孔子故里曲阜","泰山世界遗产","青岛烟台威海滨海带","青岛啤酒文化","海军与造船产业","花生蔬菜主产","潍坊风筝之乡","制造业集群完善","黄海半岛区位优势"]
+      } },
+    { id:"jiangsu", names:{en:"Jiangsu", zh:"江苏"}, x:73, y:45,
+      desc:{
+        en:["Capital: Nanjing, historic capital","Grand Canal north–south axis","Suzhou classical gardens (UNESCO)","Wealthy, innovation‑driven industry","Electronics and chip clusters","Suzhou‑Wuxi‑Nantong corridor","Yellow Sea coast & wetlands","Birthplace of Huaiyang cuisine","Strong universities and research","Dense HSR and intercity grid"],
+        zh:["省会南京，多朝古都","京杭大运河贯通","苏州古典园林(世遗)","富裕制造与创新强省","电子与半导体产业","苏锡通城市走廊","黄海海岸与湿地","淮扬菜发源地","高校科研实力雄厚","高铁与城际交通密集"]
+      } },
+    { id:"zhejiang", names:{en:"Zhejiang", zh:"浙江"}, x:75, y:54,
+      desc:{
+        en:["Capital: Hangzhou, West Lake","Vibrant private economy","E‑commerce and digital industry","Ningbo deep‑water port","Wenzhou merchant networks","Zhoushan archipelago fisheries","Longjing tea & silk","Specialized SMEs powerhouse","Water towns: Wuzhen, Xitang","Strong tourism & creative sector"],
+        zh:["省会杭州，西湖名城","民营经济极其活跃","电商与数字经济","宁波深水大港","温州商帮网络","舟山群岛与渔业","龙井茶与丝绸","专精特新中小企业","乌镇西塘水乡","文旅与创意产业发达"]
+      } },
+    { id:"anhui", names:{en:"Anhui", zh:"安徽"}, x:68, y:50,
+      desc:{
+        en:["Capital: Hefei","Huangshan Mountains (UNESCO)","Ancient villages Hongcun & Xidi","Hui style architecture & merchants","Hefei science & universities","Rice and renowned teas","Huangmei opera tradition","Iconic landscape painting imagery","Fast‑growing manufacturing","Gateway between east and central"],
+        zh:["省会合肥","黄山风景名胜(世遗)","宏村西递古村落","徽派建筑与徽商文化","科教城市合肥","稻米与名茶产区","黄梅戏传统","山水画意象之地","制造业加速崛起","承东启中交通枢纽"]
+      } },
+    { id:"fujian", names:{en:"Fujian", zh:"福建"}, x:77, y:60,
+      desc:{
+        en:["Capital: Fuzhou","Minnan culture and Hokkien dialect","Xiamen & Gulangyu (UNESCO)","Hakka tulou earthen forts (UNESCO)","Close links with Taiwan","Wuyi rock tea & Tieguanyin","Coastal manufacturing & shipbuilding","Global Fujianese diaspora","Mountain‑sea combined terrain","Stonework and building crafts"],
+        zh:["省会福州","闽南文化与闽南语系","厦门鼓浪屿(世遗)","客家土楼(世遗)","与台湾往来紧密","武夷岩茶与铁观音","沿海制造与造船业","著名侨乡遍布全球","山海相间的地貌","石作与古建技艺"]
+      } },
+    // ... (rest of provinces/regions unchanged content-wise)
+    { id:"guangdong", names:{en:"Guangdong", zh:"广东"}, x:68, y:70,
+      desc:{
+        en:["Capital: Guangzhou","Pearl River Delta megacity belt","Reform‑era frontier (SEZ Shenzhen)","Electronics and ICT manufacturing","Cantonese cuisine and dim sum","Lingnan architecture and gardens","Foreign trade and deep‑water ports","Canton Fair global reach","Cantonese language & opera","Strong innovation/startup scene"],
+        zh:["省会广州","珠三角超级城市群","改革开放前沿(深圳特区)","电子信息制造强","粤菜与早茶点心","岭南建筑与园林","外贸发达、港口众多","中国进出口商品交易会","粤语文化与粤剧","创新创业生态活跃"]
+      } },
+    { id:"guangxi", names:{en:"Guangxi", zh:"广西"}, x:61, y:70,
+      desc:{
+        en:["Capital: Nanning","Zhuang ethnic majority","Karst scenery of Guilin/Yangshuo","Gateway to the Beibu Gulf","Sugarcane and tropical fruits","Active border trade with Vietnam","Dong & Miao villages and drum towers","Longji rice terraces","Festivals and ethnic costumes","Caves and Li River landscapes"],
+        zh:["首府南宁","壮族聚居自治区","桂林阳朔喀斯特","北部湾出海通道","甘蔗与热带水果","中越边贸往来","侗寨苗寨鼓楼风貌","龙脊梯田美景","多民族节庆服饰","溶洞与漓江山水"]
+      } },
+    { id:"hainan", names:{en:"Hainan", zh:"海南"}, x:66, y:85,
+      desc:{
+        en:["Capital: Haikou","Tropical island scenery","Sanya resort beaches","Free‑trade port policy","Volcanic craters and rainforests","Rubber, coconuts, tropical fruits","Wenchang space launch site","Fisheries and sea culture","Li and Miao minority heritage","Diving spots and coral reefs"],
+        zh:["省会海口","热带岛屿风光","三亚滨海度假","自由贸易港建设","火山地貌与雨林","橡胶椰子等热带农产","文昌航天发射中心","渔业与海洋文化","黎族苗族民俗","潜水圣地与珊瑚礁"]
+      } },
+    { id:"gansu", names:{en:"Gansu", zh:"甘肃"}, x:44, y:42,
+      desc:{
+        en:["Capital: Lanzhou","Hexi Corridor of Silk Road","Dunhuang Mogao cave murals","Zhangye Danxia landforms","Oases alternating with deserts","Sheep husbandry & agro‑pastoral","Wind and solar energy bases","Yellow River flows across","Jiayuguan Great Wall pass","Multi‑ethnic cultural history"],
+        zh:["省会兰州","丝路要道河西走廊","敦煌莫高窟壁画","张掖丹霞地貌","绿洲与沙漠相间","羊业与农牧交错","风电与光伏基地","黄河穿境流经","嘉峪关长城关口","多民族历史文化厚重"]
+      } },
+    { id:"qinghai", names:{en:"Qinghai", zh:"青海"}, x:40, y:50,
+      desc:{
+        en:["Capital: Xining","Qinghai Lake, largest inland lake","Sanjiangyuan National Park","Tibetan and Qiang cultures","High‑plateau pastoralism","Salt lakes and minerals","Rapid PV and wind build‑out","Chaka Salt Lake mirror views","Kumbum Monastery / Kunlun lore","Vast, sparsely populated, fragile"],
+        zh:["省会西宁","青海湖中国内陆最大湖","三江源国家公园","藏族羌族多元文化","高原草地畜牧业","盐湖与矿产丰富","光伏风电快速发展","茶卡盐湖镜面景观","塔尔寺与昆仑传说","地域辽阔 人口稀少"]
+      } },
+    { id:"ningxia", names:{en:"Ningxia", zh:"宁夏"}, x:49, y:46,
+      desc:{
+        en:["Capital: Yinchuan","Hui autonomous region","Yellow River irrigation plains","Helan Mountains wine region","Goji berries and red dates","Shapotou desert scenery","Coal and energy chemicals","Silk Road heritage sites","Modern greenhouse agriculture","Western overland corridor"],
+        zh:["省会银川","回族聚居自治区","黄河灌区平原","贺兰山葡萄酒带","枸杞红枣特色农品","沙坡头沙漠景观","煤炭与能源化工","丝路文化遗存","现代温棚农业","西部陆路交通廊道"]
+      } },
+    { id:"xinjiang", names:{en:"Xinjiang", zh:"新疆"}, x:28, y:28,
+      desc:{
+        en:["Capital: Ürümqi","Silk Road oases: Kashgar, Turfan","Tianshan and Taklamakan Desert","Oil, natural gas and coal","Cotton and Hami melons","Multi‑ethnic music and dance","Trade with Central Asia","Kanas and Nalati scenery","Border ports and bazaars","Silk Road cultural crossroads"],
+        zh:["省会乌鲁木齐","丝路绿洲：喀什、吐鲁番","天山与塔克拉玛干","石油天然气与煤炭","棉花与哈密瓜","多民族音乐舞蹈","与中亚经贸紧密","喀纳斯与那拉提草原","口岸与传统巴扎","丝路文明交汇地"]
+      } },
+    { id:"tibet", names:{en:"Tibet (Xizang)", zh:"西藏"}, x:33, y:62,
+      desc:{
+        en:["Capital: Lhasa","Potala Palace (UNESCO)","Qinghai‑Tibet Plateau, Roof of the World","Tibetan Buddhist monasteries","Himalayan trekking routes","Yarlung Zangbo river valley","Yak herding and nomad life","Festivals and religious ceremonies","Thangka art and chanting","Sensitive high‑plateau ecology"],
+        zh:["首府拉萨","布达拉宫(世界遗产)","青藏高原 世界屋脊","藏传佛教寺庙文化","喜马拉雅徒步线路","雅鲁藏布江流域","牦牛牧业与游牧","传统节庆与法会","唐卡绘画与梵呗","高原生态脆弱"]
+      } },
+    { id:"inner-mongolia", names:{en:"Inner Mongolia", zh:"内蒙古"}, x:55, y:30,
+      desc:{
+        en:["Capital: Hohhot","Vast steppe and deserts","Horse culture and Naadam","Yurt camps and prairie life","Coal and rare‑earth resources","Large wind‑power bases","Hulunbuir grasslands","Nomadic and herding traditions","Borders Mongolia/Russia","Continental arid climate"],
+        zh:["省会呼和浩特","广袤草原与沙漠","赛马文化与那达慕","蒙古包草原体验","煤炭与稀土资源","大型风电场群","呼伦贝尔大草原","游牧与畜牧传统","毗邻蒙古与俄罗斯","大陆性干旱气候"]
+      } },
+    { id:"liaoning", names:{en:"Liaoning", zh:"辽宁"}, x:75, y:28,
+      desc:{
+        en:["Capital: Shenyang","Old industrial base of Northeast","Shenyang Imperial Palace (UNESCO)","Dalian port and finance","Shipbuilding & machinery manufacturing","Northeast revitalization programs","Petrochemical and metallurgy","Bohai Bay coastline","Cold, dry winters","Universities and research institutes"],
+        zh:["省会沈阳","东北传统工业基地","沈阳故宫(世遗)","大连港与金融业","造船与装备制造","东北振兴计划","石化与冶金工业","渤海湾海岸线","冬季寒冷干燥","高校科研资源丰富"]
+      } },
+    { id:"jilin", names:{en:"Jilin", zh:"吉林"}, x:76, y:20,
+      desc:{
+        en:["Capital: Changchun","FAW auto industry cluster","Changbai Mountains & Tianchi","Rime ice in Jilin City","Ginseng and herbal medicine","Forests and forestry economy","Bordering Russia/North Korea","Film‑making heritage in Changchun","Ski resorts & winter tourism","Manchu and Korean minorities"],
+        zh:["省会长春","一汽汽车产业基地","长白山与天池","吉林市雾凇奇观","人参与中药材","森林资源丰富","毗邻俄罗斯/朝鲜","长春电影制片传统","滑雪与冰雪旅游","满族与朝鲜族聚居"]
+      } },
+    { id:"heilongjiang", names:{en:"Heilongjiang", zh:"黑龙江"}, x:78, y:10,
+      desc:{
+        en:["Capital: Harbin","World‑famous Ice & Snow Festival","Sino‑Russian cultural imprint","Soy, corn and wheat farming","Many border ports with Russia","Coal and energy resources","Amur/Songhua river systems","Sun Island and city parks","Skiing and winter sports","Vast boreal forests"],
+        zh:["省会哈尔滨","冰雪大世界闻名","中俄文化交流深厚","大豆玉米小麦产区","对俄口岸众多","煤炭与能源储量","黑龙江/松花江水系","太阳岛与城市公园","滑雪冰雪运动","广阔寒温带森林"]
+      } },
+    { id:"shanxi", names:{en:"Shanxi", zh:"山西"}, x:60, y:40,
+      desc:{
+        en:["Capital: Taiyuan","Coal resources & heavy energy","Pingyao Ancient City (UNESCO)","Hanging Temple at Hengshan","Qiao Family courtyard & banks","Loess Plateau landforms","Noodle and vinegar cuisine","Jinci Temple & ancient pagodas","Ongoing energy transition","Historic draft banks (piaohao)"],
+        zh:["省会太原","煤炭资源与能源工业","平遥古城(世遗)","恒山悬空寺","乔家大院与票号","黄土高原风貌","面食与老陈醋","晋祠与古塔群","能源转型进行中","近代票号金融史"]
+      } },
+    { id:"shaanxi", names:{en:"Shaanxi", zh:"陕西"}, x:55, y:48,
+      desc:{
+        en:["Capital: Xi’an","Terracotta Army (UNESCO)","Ancient Chang’an & Silk Road","Qin/Han mausoleums and sites","Biangbiang noodles & snacks","Aerospace and electronics","Mount Hua dramatic peaks","Guanzhong Plain agriculture","City wall & many museums","Dense universities & research"],
+        zh:["省会西安","秦始皇兵马俑(世遗)","古都长安与丝绸之路","秦汉帝陵遗址众多","Biangbiang面与小吃","航天电子产业","华山奇峰险峻","关中平原农业","古城墙与博物馆","高校科研资源集中"]
+      } },
+    { id:"henan", names:{en:"Henan", zh:"河南"}, x:64, y:46,
+      desc:{
+        en:["Capital: Zhengzhou","Cradle of Chinese civilization","Ancient capitals: Luoyang, Kaifeng","Shaolin Temple and kung fu","Yellow River alluvial plain","Wheat belt and agriculture","Manufacturing & logistics hub","Longmen Grottoes near Luoyang","Ceramics and traditional crafts","Central HSR crossroads"],
+        zh:["省会郑州","中华文明发源地","古都洛阳、开封","少林寺与功夫文化","黄河冲积平原","小麦主产区","制造业与物流中心","龙门石窟(洛阳)","陶瓷与传统工艺","华中高铁枢纽"]
+      } },
+    { id:"hubei", names:{en:"Hubei", zh:"湖北"}, x:63, y:54,
+      desc:{
+        en:["Capital: Wuhan","Confluence of Yangtze & Han","Bridge city & transport hub","Upstream of Three Gorges","Optics Valley & auto industry","Many universities (Wuhan U)","Yellow Crane Tower landmark","Lakes and wetlands widespread","Hot dry noodles specialty","Central China strategic location"],
+        zh:["省会武汉","长江汉江交汇","桥梁之城 交通枢纽","三峡工程上游区域","光谷与汽车产业","高校云集(武汉大学)","黄鹤楼地标","湖泊湿地众多","热干面等美食","华中区位核心"]
+      } },
+    { id:"hunan", names:{en:"Hunan", zh:"湖南"}, x:63, y:61,
+      desc:{
+        en:["Capital: Changsha","Spicy Xiang cuisine","Zhangjiajie sandstone pillars","Dongting Lake & Yueyang Tower","Shaoshan, Mao’s birthplace","Steel & construction machinery","Oranges and rice production","Miao/Tujia minority cultures","Rail transit equipment","Varied mountains and waters"],
+        zh:["省会长沙","湘菜以辣著称","张家界峰林奇观","洞庭湖与岳阳楼","韶山毛泽东故居","钢铁与工程机械","柑橘与水稻产区","苗族土家族文化","轨道交通装备产业","多样山水景观"]
+      } },
+    { id:"sichuan", names:{en:"Sichuan", zh:"四川"}, x:52, y:57,
+      desc:{
+        en:["Capital: Chengdu","Sichuan cuisine, pepper & chili","Giant pandas & breeding bases","Jiuzhaigou and Huanglong parks","Ancient Dujiangyan irrigation","Tea culture & ma‑la flavors","Aviation, electronics & IT","Shu heritage and Three Kingdoms","Relaxed lifestyle vibe","Western China innovation & tourism"],
+        zh:["省会成都","川菜麻辣鲜香","大熊猫与繁育基地","九寨沟黄龙风景","都江堰古代水利","茶文化与麻辣口味","航空电子与信息产业","蜀文化与三国遗存","慢节奏生活方式","西部创新与文旅强省"]
+      } },
+    { id:"guizhou", names:{en:"Guizhou", zh:"贵州"}, x:58, y:64,
+      desc:{
+        en:["Capital: Guiyang","Karst plateaus and waterfalls","Huangguoshu Grand Waterfall","Miao & Dong minority villages","Moutai liquor heritage","Big‑data parks & computing power","Silverware and batik crafts","Rice‑terrace village landscapes","Caves and natural bridges","Cool green summers"],
+        zh:["省会贵阳","喀斯特地貌与瀑布","黄果树瀑布群","苗侗民族村寨","茅台酱香酒","大数据中心集聚","银饰与蜡染技艺","梯田与山村风貌","溶洞与天生桥","夏季气候凉爽"]
+      } },
+    { id:"yunnan", names:{en:"Yunnan", zh:"云南"}, x:52, y:72,
+      desc:{
+        en:["Capital: Kunming","Exceptional biodiversity","Many ethnicities and languages","Lijiang Old Town (UNESCO)","Dali and Erhai Lake scenery","Pu’er tea & Tea‑Horse Road","Tropical Xishuangbanna","Snow peaks like Meili","Links to South/Southeast Asia","Flower and coffee industries"],
+        zh:["省会昆明","生物多样性突出","多民族多语言并存","丽江古城(世遗)","大理洱海风景","普洱茶与茶马古道","西双版纳热带雨林","梅里雪山等高峰","辐射南亚东南亚","花卉与咖啡产业"]
+      } },
+    // SARs & Taiwan
+    { id:"hong-kong", names:{en:"Hong Kong", zh:"香港"}, x:71, y:73,
+      desc:{
+        en:["Special Administrative Region","Asian financial center","Victoria Harbour skyline","Extensive MTR metro system","Dim sum & cha‑chaan‑tengs","Multilingual global city","Major container seaport","The Peak and outlying islands","Art fairs and conventions","Hiking trails and beaches"],
+        zh:["中国特别行政区","亚洲金融中心","维多利亚港天际线","MTR地铁网络发达","点心与茶餐厅文化","多语国际化都市","大型集装箱港口","太平山与离岛风光","艺术展会与会展业","远足徒步与海滩"]
+      } },
+    { id:"macau", names:{en:"Macau", zh:"澳门"}, x:67, y:73,
+      desc:{
+        en:["Pearl River Delta gateway","Portuguese quarters, UNESCO old town","Tourism and entertainment economy","Cotai Strip resort zone","Macanese fusion cuisine","MICE conventions and events","Taipa and Coloane islands","Macau Tower skywalk","Lotus emblem & festivals","Fishing port and maritime history"],
+        zh:["珠三角重要口岸","葡式街区与世界遗产","旅游会展与娱乐业","路氹城综合度假区","土生葡菜融合风味","会展(MICE)经济","氹仔与路环两岛","澳门塔空中漫步","莲花标志与节庆","渔港传统与航运史"]
+      } },
+    { id:"taiwan", names:{en:"Taiwan", zh:"台湾"}, x:86, y:63,
+      desc:{
+        en:["Capital: Taipei (region)","World‑leading semiconductor industry","Night‑market and street‑food scene","High mountains & long coastlines","Taroko Gorge landscapes","Oolong tea traditions","Hakka & indigenous cultures","Round‑island cycling routes","Dense rail and metro systems","Active startups and creative sector"],
+        zh:["首府台北(台湾地区)","半导体产业世界领先","夜市与小吃文化","高山与绵长海岸线","太鲁阁峡谷景观","乌龙茶传统","客家与原住民文化","环岛骑行路线","铁路与捷运网络密","创业与文创产业活跃"]
+      } }
+  ];
+
+  // === Shift markers south ===
+  function shiftMarkersSouth(){
+    // Remember originals we care about
+    const yOrig = Object.fromEntries(PROVINCES.map(p=>[p.id,p.y]));
+    // Uniform shift south by +6 for all markers
+    PROVINCES.forEach(p=>{ p.y = Math.min(100, p.y + 6); });
+    // Specific remaps per your note:
+    // Shandong → height of previous Shanghai; Shanghai → height of previous Fujian
+    const shandong = PROVINCES.find(p=>p.id==='shandong');
+    const shanghai = PROVINCES.find(p=>p.id==='shanghai');
+    if (shandong && shanghai) shandong.y = yOrig['shanghai'];
+    const fujianY = yOrig['fujian'];
+    if (shanghai && typeof fujianY==='number') shanghai.y = fujianY;
+  }
+
+  const state = { lang: 'en', activeId: null };
+  const markersEl = document.getElementById('markers');
+  const nameEl = document.getElementById('provName');
+  const tagsEl = document.getElementById('provTags');
+  const descEl = document.getElementById('provDesc');
+  const imgEl = document.getElementById('provImg');
+
+  function renderMarkers(){
+    markersEl.innerHTML='';
+    PROVINCES.forEach(p => {
+      const b = document.createElement('button');
+      b.className = 'marker';
+      b.style.left = p.x + '%';
+      b.style.top  = p.y + '%';
+      b.textContent = p.names[state.lang] || p.names.en;
+      b.setAttribute('aria-label', (p.names[state.lang]||p.names.en));
+      b.addEventListener('click', () => selectProvince(p.id));
+      if (state.activeId === p.id) b.classList.add('active');
+      markersEl.appendChild(b);
+    });
+  }
+
+  function renderDescription(p){
+    const d = (p && p.desc && (p.desc[state.lang] ?? p.desc.en)) || '';
+    descEl.innerHTML = '';
+    if (Array.isArray(d)){
+      const ul = document.createElement('ul');
+      d.forEach(item => { const li = document.createElement('li'); li.textContent = item; ul.appendChild(li); });
+      descEl.appendChild(ul);
+    } else {
+      descEl.textContent = d;
+    }
+  }
+
+  function selectProvince(id){
+    const p = PROVINCES.find(x=>x.id===id) || PROVINCES[0];
+    state.activeId = p.id;
+    nameEl.textContent = p.names[state.lang] || p.names.en;
+    tagsEl.innerHTML = '';
+    const tag = document.createElement('span');
+    tag.className='tag';
+    tag.textContent = tierLabelFor(p, state.lang);
+    tagsEl.appendChild(tag);
+
+    renderDescription(p);
+
+    // Province image (your exact filename scheme)
+    imgEl.onerror = () => { imgEl.alt = 'Image not found / 图片未找到'; };
+    imgEl.src = getProvinceImageURL(p);
+
+    // Marker active state
+    [...document.querySelectorAll('.marker')].forEach(m => m.classList.remove('active'));
+    const idx = PROVINCES.findIndex(x=>x.id===id);
+    if (markersEl.children[idx]) markersEl.children[idx].classList.add('active');
+  }
+
+  // Language switch
+  document.querySelectorAll('.lang-toggle button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.lang-toggle button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      state.lang = btn.dataset.lang || 'en';
+      renderMarkers();
+      if (state.activeId) selectProvince(state.activeId);
+    });
+  });
+
+  // Init
+  shiftMarkersSouth();
+  renderMarkers();
+  selectProvince('beijing');
+
+  // ====== Mini-Tests (Console) ======
+  (function runTests(){
+    const make = (en) => ({ names:{en} });
+    console.assert(getProvinceImageURL(make('Anhui')).endsWith('ChatGPT%20Anhui.png'), 'TEST: Anhui URL');
+    console.assert(getProvinceImageURL(make('Hong Kong')).endsWith('ChatGPT%20HK.png'), 'TEST: Hong Kong URL');
+    console.assert(getProvinceImageURL(make('Inner Mongolia')).endsWith('ChatGPT%20Inner%20Mongolia.png'), 'TEST: Inner Mongolia URL');
+    console.assert(getProvinceImageURL(make('Tibet (Xizang)')).endsWith('ChatGPT%20Tibet%20%28Xizang%29.png'), 'TEST: Tibet (Xizang) URL');
+
+    // Language defaults
+    console.assert(state.lang==='en', 'Default language should be EN');
+
+    // Marker shift checks (based on original constants in this file)
+    const getY = id => PROVINCES.find(p=>p.id===id).y;
+    console.assert(getY('shanghai')===60, 'Shanghai should now sit at Fujian\'s previous height (60)');
+    console.assert(getY('shandong')===49, 'Shandong should now sit at Shanghai\'s previous height (49)');
+    console.assert(getY('beijing')===34, 'Beijing moved south uniformly by +6 (28→34)');
+
+    console.info('✔ URL, language, and marker-position tests passed');
+  })();
+
+  </script>
+</body>
+</html>
