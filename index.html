@@ -24,14 +24,14 @@
     .map{max-width:100%; max-height:100%; width:100%; height:auto; display:block; filter:drop-shadow(0 10px 22px rgba(0,0,0,.35))}
 
     .markers{position:absolute; inset:0; pointer-events:none}
-    .marker{position:absolute; transform:translate(-50%,-50%); pointer-events:auto; border:none; background:#102033; color:#e9eef7; border:1px solid #223247; padding:6px 10px; border-radius:12px; font-size:12px; cursor:pointer; white-space:nowrap}
+    .marker{position:absolute; transform:translate(-50%,-50%); pointer-events:auto; border:none; background:#102033; color:#e9eef7; border:1px solid #223247; padding:6px 10px; border-radius:12px; font-size:12px; cursor:pointer; white-space:nowrap; z-index:1; touch-action:manipulation;}
     .marker:hover{outline:2px solid var(--ring)}
-    .marker.active{background:#17365d; border-color:#2b5d95}
+    .marker.active{background:#17365d; border-color:#2b5d95; z-index:2}
 
     .right .content{display:flex; flex-direction:column; gap:14px; padding:16px; overflow:auto}
     .card{background:#0e1219; border:1px solid #1b2230; border-radius:16px; padding:16px}
-    .hero{display:flex; gap:14px; align-items:center}
-    .hero img{width:120px; height:90px; object-fit:cover; border-radius:12px; border:1px solid #1b2230}
+    .hero{display:flex; gap:14px; align-items:stretch; flex-direction:column}
+    .hero img{width:100%; height:auto; object-fit:cover; border-radius:12px; border:1px solid #1b2230}
     .name{font-size:20px; font-weight:800}
     .tags{display:flex; gap:8px; flex-wrap:wrap}
     .tag{font-size:11px; color:#b6c3d6; background:#0a111b; padding:4px 8px; border-radius:999px; border:1px solid #1b2230}
@@ -42,7 +42,20 @@
     .footer{padding:10px 16px; border-top:1px solid #1b2230; display:flex; justify-content:space-between; align-items:center}
     .source{font-size:12px; color:#9fb5d4}
 
-    @media (max-width: 980px){ .app{grid-template-columns:1fr; height:auto} .left{height:60vh} .right{height:auto; min-height:40vh} }
+    /* Tablet: stack columns */
+    @media (max-width: 980px){
+      .app{grid-template-columns:1fr; height:auto}
+      .left{height:60vh}
+      .right{height:auto; min-height:40vh}
+    }
+
+    /* Smartphones: shrink base font to two-thirds and tighten markers */
+    @media (max-width: 640px){
+      body{ font-size:66.666%; }
+      .marker{ font-size:10px; padding:4px 6px; border-radius:10px; transform:translate(-50%,-50%) scale(0.9); }
+      .name{ font-size:18px; }
+      .right .content{ gap:12px; }
+    }
   </style>
 </head>
 <body>
@@ -106,6 +119,10 @@
   // Example: Anhui → "ChatGPT Anhui.png"; Hong Kong → "ChatGPT HK.png"
   function getProvinceImageURL(p){
     const en = p?.names?.en || "";
+    if (p.id === 'tibet'){
+      // Use the exact path you requested for Tibet
+      return "https://github.com/Flo1632/ChinaInteractiveMap/blob/main/ChatGPT%20Tibet.png?raw=1";
+    }
     const short = (en === "Hong Kong") ? "HK" : en;
     const filename = `ChatGPT ${short}.png`;
     return RAW_BASE + encodeURIComponent(filename);
@@ -319,6 +336,58 @@
   const descEl = document.getElementById('provDesc');
   const imgEl = document.getElementById('provImg');
 
+  // --- Prevent overlapping markers (gentle collision resolution) ---
+  function resolveCollisions(){
+    const container = document.getElementById('markers');
+    const markers = Array.from(container.children);
+    if (markers.length < 2) return;
+
+    const wrapRect = container.getBoundingClientRect();
+    const toPct = (dx,dy)=>[ (dx / wrapRect.width)*100, (dy / wrapRect.height)*100 ];
+
+    const MAX_ITERS = 60;
+    for (let iter=0; iter<MAX_ITERS; iter++){
+      let moved = false;
+      for (let i=0; i<markers.length; i++){
+        for (let j=i+1; j<markers.length; j++){
+          const a = markers[i], b = markers[j];
+          const ra = a.getBoundingClientRect();
+          const rb = b.getBoundingClientRect();
+          // small margin to avoid near-touch
+          const overlapX = Math.min(ra.right - rb.left, rb.right - ra.left);
+          const overlapY = Math.min(ra.bottom - rb.top, rb.bottom - ra.top);
+          const isOverlap = overlapX > 2 && overlapY > 2;
+          if (!isOverlap) continue;
+          // Push apart along the axis of smaller overlap
+          if (overlapX < overlapY){
+            const dir = (ra.left < rb.left) ? -1 : 1;
+            const [dxp] = toPct((overlapX/2)+1, 0);
+            shiftPct(a, dir*dxp, 0);
+            shiftPct(b, -dir*dxp, 0);
+          } else {
+            const dir = (ra.top < rb.top) ? -1 : 1;
+            const [, dyp] = toPct(0, (overlapY/2)+1);
+            shiftPct(a, 0, dir*dyp);
+            shiftPct(b, 0, -dir*dyp);
+          }
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+
+    function shiftPct(el, dxp, dyp){
+      let left = parseFloat(el.style.left);
+      let top  = parseFloat(el.style.top);
+      left = Math.max(2, Math.min(98, left + dxp));
+      top  = Math.max(2, Math.min(98, top + dyp));
+      el.style.left = left + '%';
+      el.style.top  = top + '%';
+    }
+  }
+
+  function debounce(fn, wait=120){ let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); }; }
+
   function renderMarkers(){
     markersEl.innerHTML='';
     PROVINCES.forEach(p => {
@@ -332,6 +401,8 @@
       if (state.activeId === p.id) b.classList.add('active');
       markersEl.appendChild(b);
     });
+    // run collision resolver on next frame so DOM has sizes
+    requestAnimationFrame(resolveCollisions);
   }
 
   function renderDescription(p){
@@ -379,6 +450,12 @@
     });
   });
 
+  // Reflow handling to maintain separation on resize
+  window.addEventListener('resize', debounce(()=>{
+    renderMarkers();
+    if (state.activeId) selectProvince(state.activeId);
+  }, 150));
+
   // Init
   shiftMarkersSouth();
   renderMarkers();
@@ -390,7 +467,7 @@
     console.assert(getProvinceImageURL(make('Anhui')).endsWith('ChatGPT%20Anhui.png'), 'TEST: Anhui URL');
     console.assert(getProvinceImageURL(make('Hong Kong')).endsWith('ChatGPT%20HK.png'), 'TEST: Hong Kong URL');
     console.assert(getProvinceImageURL(make('Inner Mongolia')).endsWith('ChatGPT%20Inner%20Mongolia.png'), 'TEST: Inner Mongolia URL');
-    console.assert(getProvinceImageURL(make('Tibet (Xizang)')).endsWith('ChatGPT%20Tibet%20%28Xizang%29.png'), 'TEST: Tibet (Xizang) URL');
+    console.assert(getProvinceImageURL({id:'tibet',names:{en:'Tibet (Xizang)'}}).endsWith('ChatGPT%20Tibet.png?raw=1'), 'TEST: Tibet URL override');
 
     // Language defaults
     console.assert(state.lang==='en', 'Default language should be EN');
@@ -401,7 +478,22 @@
     console.assert(getY('shandong')===49, 'Shandong should now sit at Shanghai\'s previous height (49)');
     console.assert(getY('beijing')===34, 'Beijing moved south uniformly by +6 (28→34)');
 
-    console.info('✔ URL, language, and marker-position tests passed');
+    // NEW: marker count equals data length
+    const markerCount = document.querySelectorAll('#markers .marker').length;
+    console.assert(markerCount === PROVINCES.length, 'Markers count should equal provinces length');
+
+    // NEW: tier label spot checks
+    console.assert(tierLabelFor({id:'beijing'}, 'zh') === '直辖市', 'Tier label Beijing zh');
+    console.assert(tierLabelFor({id:'guangxi'}, 'en') === 'Autonomous Region', 'Tier label Guangxi en');
+    console.assert(tierLabelFor({id:'macau'}, 'en') === 'Special Administrative Region', 'Tier label Macau en');
+    console.assert(tierLabelFor({id:'henan'}, 'en') === 'Province', 'Tier label Henan en');
+    console.assert(tierLabelFor({id:'taiwan'}, 'en') === 'Provincial‑level', 'Tier label Taiwan en');
+
+    // NEW: background map URL contains expected file
+    const mapSrc = document.getElementById('chinaMap').src;
+    console.assert(mapSrc.includes('ChatGPT%20China_Map.png?raw=1'), 'Background map URL check');
+
+    console.info('✔ URL, language, marker-position, and extra tests passed');
   })();
 
   </script>
